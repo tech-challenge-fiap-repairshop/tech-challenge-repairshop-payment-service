@@ -1,5 +1,8 @@
 package com.cao.repairshop.payment.infrastructure.mercadopago
 
+import com.cao.repairshop.payment.infrastructure.mercadopago.dtos.MercadoPagoPaymentRequest
+import com.cao.repairshop.payment.infrastructure.mercadopago.dtos.MercadoPagoPaymentResponse
+import com.cao.repairshop.payment.infrastructure.mercadopago.dtos.MercadoPagoRefundResponse
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker
@@ -13,34 +16,6 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.UUID
 
-data class MercadoPagoPaymentRequest(
-    val orderId: UUID,
-    val customerId: UUID,
-    val amount: Double,
-    val description: String = "Ordem de Servico Oficina Mecanica"
-)
-
-data class MercadoPagoPaymentResponse(
-    val paymentId: String,
-    val status: String,
-    val qrCode: String,
-    val qrCodeBase64: String? = null,
-    val ticketUrl: String? = null,
-    val isFallback: Boolean = false
-)
-
-data class MercadoPagoRefundResponse(
-    val refundId: String,
-    val paymentId: String,
-    val status: String,
-    val amount: Double,
-    val isFallback: Boolean = false
-)
-
-/**
- * Cliente de Integração com o Mercado Pago protegido por Circuit Breaker (Resilience4j)
- * Conforme o desenho de arquitetura da Fase 4.
- */
 @Component
 class MercadoPagoClient(
     @Value("\${mercadopago.access-token:#{null}}")
@@ -54,12 +29,9 @@ class MercadoPagoClient(
         .connectTimeout(Duration.ofSeconds(3))
         .build()
 
-    /**
-     * Gera ordem de pagamento / QR Code Pix no Mercado Pago com proteção de Circuit Breaker
-     */
     @CircuitBreaker(name = "mercadoPagoCircuitBreaker", fallbackMethod = "fallbackCreatePayment")
     fun createPayment(request: MercadoPagoPaymentRequest): MercadoPagoPaymentResponse {
-        logger.info("Iniciando chamada ao gateway do Mercado Pago ({}) para OS {} no valor de R$ {}", baseUrl, request.orderId, request.amount)
+        logger.info("Chamando gateway do Mercado Pago ({}) para OS {} no valor de R$ {}", baseUrl, request.orderId, request.amount)
 
         if (baseUrl != "https://api.mercadopago.com" || (!accessToken.isNullOrBlank() && !accessToken.startsWith("mock-offline"))) {
             val payload = mapOf(
@@ -91,12 +63,11 @@ class MercadoPagoClient(
                 val ticketUrl = json?.path("point_of_interaction")?.path("transaction_data")?.path("ticket_url")?.asText()
                     ?: "https://www.mercadopago.com.br/payments/$paymentId/ticket"
 
-                logger.info("Pagamento gerado com sucesso via endpoint Mercado Pago: PaymentId={}", paymentId)
+                logger.info("Pagamento gerado com sucesso via Mercado Pago: PaymentId={}", paymentId)
                 return MercadoPagoPaymentResponse(
                     paymentId = paymentId,
                     status = "PENDING",
                     qrCode = qrCode,
-                    qrCodeBase64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
                     ticketUrl = ticketUrl,
                     isFallback = false
                 )
@@ -106,7 +77,6 @@ class MercadoPagoClient(
             }
         }
 
-        // Simulação fallback offline quando não há token e está na URL padrão
         val paymentId = "MP-" + UUID.randomUUID().toString().take(12).uppercase()
         val qrCodePix = "00020126580014BR.GOV.BCB.PIX0136${UUID.randomUUID()}520400005303986540${request.amount}5802BR5925OFICINA REPAIRSHOP S/A6009SAO PAULO62070503***6304"
 
@@ -114,17 +84,13 @@ class MercadoPagoClient(
             paymentId = paymentId,
             status = "PENDING",
             qrCode = qrCodePix,
-            qrCodeBase64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
             ticketUrl = "https://www.mercadopago.com.br/payments/$paymentId/ticket",
             isFallback = false
         )
     }
 
-    /**
-     * Fallback resiliente disparado quando o Circuit Breaker abre ou ocorrem falhas/timeouts no Mercado Pago
-     */
     fun fallbackCreatePayment(request: MercadoPagoPaymentRequest, t: Throwable): MercadoPagoPaymentResponse {
-        logger.warn("Circuit Breaker acionado para Mercado Pago na OS {}. Motivo: {}. Executando Fallback de contingência...",
+        logger.warn("Circuit Breaker acionado para Mercado Pago na OS {}. Motivo: {}. Fallback ativado...",
             request.orderId, t.message)
 
         val fallbackPaymentId = "FALLBACK-MP-" + UUID.randomUUID().toString().take(8).uppercase()
@@ -139,12 +105,9 @@ class MercadoPagoClient(
         )
     }
 
-    /**
-     * Realiza o estorno/reembolso no Mercado Pago para compensação da Saga
-     */
     @CircuitBreaker(name = "mercadoPagoCircuitBreaker", fallbackMethod = "fallbackRefundPayment")
     fun refundPayment(paymentId: String, amount: Double, reason: String?): MercadoPagoRefundResponse {
-        logger.info("Iniciando chamada de estorno ao gateway do Mercado Pago ({}) para PaymentId {} no valor de R$ {}", baseUrl, paymentId, amount)
+        logger.info("Iniciando chamada de estorno no Mercado Pago para PaymentId {} no valor de R$ {}", paymentId, amount)
 
         if (baseUrl != "https://api.mercadopago.com" || (!accessToken.isNullOrBlank() && !accessToken.startsWith("mock-offline"))) {
             val payload = mapOf(
@@ -192,11 +155,8 @@ class MercadoPagoClient(
         )
     }
 
-    /**
-     * Fallback para estorno quando o Circuit Breaker abre
-     */
     fun fallbackRefundPayment(paymentId: String, amount: Double, reason: String?, t: Throwable): MercadoPagoRefundResponse {
-        logger.warn("Circuit Breaker acionado para estorno no Mercado Pago no PaymentId {}. Motivo: {}. Registrando estorno de contingência...",
+        logger.warn("Circuit Breaker acionado para estorno no Mercado Pago no PaymentId {}. Motivo: {}. Fallback ativado...",
             paymentId, t.message)
 
         val fallbackRefundId = "FALLBACK-REF-" + UUID.randomUUID().toString().take(8).uppercase()

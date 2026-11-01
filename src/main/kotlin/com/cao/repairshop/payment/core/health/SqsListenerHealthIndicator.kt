@@ -1,4 +1,4 @@
-﻿package com.cao.repairshop.payment.infrastructure.health
+package com.cao.repairshop.payment.core.health
 
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -10,15 +10,15 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * HealthIndicator especializado para monitorar listeners SQS do Payment Service (PF-11).
- * Detecta Silent Zombie Pods e aciona a livenessProbe do Kubernetes para auto-reinício.
+ * HealthIndicator especializado para monitorar a saúde de listeners e consumidores SQS no payment-service.
+ * Evita "Silent Zombie Pods" no Kubernetes (EKS).
  */
 @Component("sqsListener")
 class SqsListenerHealthIndicator(
-    @Value("\${payment.sqs.health-check.enabled:true}")
-    private val enabled: Boolean,
-    @Value("\${payment.sqs.health-check.max-idle-seconds:120}")
-    private val defaultMaxIdleSeconds: Long
+    @Value("\${repairshop.sqs.health-check.enabled:true}")
+    private val enabled: Boolean = true,
+    @Value("\${repairshop.sqs.health-check.max-idle-seconds:120}")
+    private val defaultMaxIdleSeconds: Long = 120
 ) : HealthIndicator {
 
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -39,17 +39,26 @@ class SqsListenerHealthIndicator(
                 queueMaxIdleConfig[queueName] = maxIdleSeconds
             }
         }
+
+        @JvmStatic
+        fun reset() {
+            queueHeartbeats.clear()
+            queueMaxIdleConfig.clear()
+        }
     }
 
     override fun health(): Health {
         if (!enabled) {
-            return Health.up().withDetail("status", "DISABLED").build()
+            return Health.up()
+                .withDetail("status", "DISABLED")
+                .withDetail("message", "SQS Health check explicitamente desabilitado por configuração")
+                .build()
         }
 
         if (queueHeartbeats.isEmpty()) {
             return Health.up()
                 .withDetail("status", "STANDBY")
-                .withDetail("message", "Nenhum listener SQS registrado no Payment Service")
+                .withDetail("message", "Nenhum listener SQS ativo ou registrado no momento")
                 .build()
         }
 
@@ -62,21 +71,26 @@ class SqsListenerHealthIndicator(
             val maxIdle = queueMaxIdleConfig[queueName] ?: defaultMaxIdleSeconds
             val elapsedSeconds = Duration.between(lastHeartbeat, now).seconds
 
+            builder.withDetail("queue.$queueName.last_heartbeat", lastHeartbeat.toString())
             builder.withDetail("queue.$queueName.elapsed_seconds", elapsedSeconds)
+            builder.withDetail("queue.$queueName.max_idle_seconds", maxIdle)
+
             if (elapsedSeconds > maxIdle) {
                 hasFailures = true
-                failedQueues.add("$queueName (${elapsedSeconds}s > ${maxIdle}s)")
+                failedQueues.add("$queueName (idle: ${elapsedSeconds}s > max: ${maxIdle}s)")
             }
         }
 
         return if (hasFailures) {
-            logger.error("Payment Service - SQS Listener Health FALHOU: Queues travadas: {}", failedQueues)
+            logger.error("SQS Listener Health Check FALHOU: Queues travadas: {}", failedQueues)
             Health.down()
                 .withDetail("failed_queues", failedQueues)
-                .withDetail("reason", "Heartbeat expirado em filas de pagamento (Possível Silent Zombie Pod)")
+                .withDetail("reason", "Uma ou mais filas SQS ultrapassaram o tempo limite de heartbeat (possível Silent Zombie Pod)")
                 .build()
         } else {
-            builder.withDetail("monitored_queues_count", queueHeartbeats.size).build()
+            builder
+                .withDetail("monitored_queues_count", queueHeartbeats.size)
+                .build()
         }
     }
 }

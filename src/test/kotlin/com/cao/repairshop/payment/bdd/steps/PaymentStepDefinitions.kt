@@ -1,13 +1,12 @@
 package com.cao.repairshop.payment.bdd.steps
 
 import com.cao.repairshop.payment.bdd.config.CucumberTestcontainersConfig
-import com.cao.repairshop.payment.infrastructure.mercadopago.MercadoPagoClient
-import com.cao.repairshop.payment.infrastructure.persistence.DynamoPaymentRepository
-import com.cao.repairshop.payment.infrastructure.persistence.models.PaymentDynamoItem
-import com.cao.repairshop.payment.infrastructure.web.CreatePaymentRequest
-import com.cao.repairshop.payment.infrastructure.web.PaymentController
-import com.cao.repairshop.payment.infrastructure.web.RefundPaymentRequest
-import com.cao.repairshop.payment.infrastructure.web.WebhookNotification
+import com.cao.repairshop.payment.infrastructure.controller.PaymentController
+import com.cao.repairshop.payment.infrastructure.controller.dtos.CreatePaymentRequest
+import com.cao.repairshop.payment.infrastructure.controller.dtos.PaymentResponse
+import com.cao.repairshop.payment.infrastructure.controller.dtos.RefundPaymentRequest
+import com.cao.repairshop.payment.infrastructure.controller.dtos.WebhookNotification
+import com.cao.repairshop.payment.infrastructure.persistence.dynamo.DynamoPaymentRepository
 import io.cucumber.java.After
 import io.cucumber.java.Before
 import io.cucumber.java.pt.Dado
@@ -34,8 +33,8 @@ class PaymentStepDefinitions(
     private var currentOrderId: UUID = UUID.randomUUID()
     private var currentCustomerId: UUID = UUID.randomUUID()
     private var currentAmount: Double = 0.0
-    private var lastCreatedPayment: PaymentDynamoItem? = null
-    private var lastPaymentResponse: ResponseEntity<PaymentDynamoItem>? = null
+    private var lastCreatedPayment: PaymentResponse? = null
+    private var lastPaymentResponse: ResponseEntity<PaymentResponse>? = null
     private var lastRefundReason: String? = null
 
     @Before
@@ -91,7 +90,7 @@ class PaymentStepDefinitions(
         assertTrue(lastPaymentResponse!!.statusCode.is2xxSuccessful)
         val payment = lastPaymentResponse!!.body
         assertNotNull(payment)
-        assertFalse(payment!!.paymentId.isBlank())
+        assertFalse(payment!!.id.isBlank())
     }
 
     @E("a cobrança deve ser registrada no DynamoDB com status {string}")
@@ -193,7 +192,7 @@ class PaymentStepDefinitions(
             paymentMethod = "MERCADO_PAGO_QR"
         )
         val created = paymentController.createPaymentForOrder(currentOrderId, request).body!!
-        val confirmed = paymentController.confirmPayment(created.paymentId).body!!
+        val confirmed = paymentController.confirmPayment(created.id).body!!
         lastCreatedPayment = confirmed
         assertEquals("APPROVED", lastCreatedPayment!!.status)
     }
@@ -203,7 +202,7 @@ class PaymentStepDefinitions(
         lastRefundReason = motivo
         val payment = lastCreatedPayment ?: fail("Nenhum pagamento aprovado disponível")
         val refundReq = RefundPaymentRequest(reason = motivo)
-        val response = paymentController.refundPayment(payment.paymentId, refundReq)
+        val response = paymentController.refundPayment(payment.id, refundReq)
         assertTrue(response.statusCode.is2xxSuccessful)
         lastCreatedPayment = response.body
     }
@@ -249,7 +248,9 @@ class PaymentStepDefinitions(
         )
         val response = paymentController.webhook(webhookPayload)
         assertTrue(response.statusCode.is2xxSuccessful)
-        lastCreatedPayment = paymentRepository.findById(payment.paymentId)
+        val saved = paymentRepository.findById(payment.paymentId)
+        assertNotNull(saved)
+        assertEquals("REJECTED", saved!!.status)
     }
 
     @E("uma notificação de recusa de pagamento deve ser enviada para a fila de clientes")
@@ -288,7 +289,7 @@ class PaymentStepDefinitions(
         assertNotNull(lastPaymentResponse)
         assertTrue(lastPaymentResponse!!.statusCode.is2xxSuccessful)
         val payment = lastCreatedPayment ?: fail("Nenhum pagamento retornado")
-        assertTrue(payment.paymentId.startsWith("FALLBACK-MP-"), "ID do pagamento deveria começar com prefixo FALLBACK-MP- mas foi: ${payment.paymentId}")
+        assertTrue(payment.id.startsWith("FALLBACK-MP-"), "ID do pagamento deveria começar com prefixo FALLBACK-MP- mas foi: ${payment.id}")
     }
 
     @E("o pagamento deve ser registrado com método {string}")
@@ -307,4 +308,3 @@ class PaymentStepDefinitions(
         assertTrue(payment.paymentInfo.contains("contingencia-oficina-repairshop"), "QR Code deveria ser o de contingência: ${payment.paymentInfo}")
     }
 }
-

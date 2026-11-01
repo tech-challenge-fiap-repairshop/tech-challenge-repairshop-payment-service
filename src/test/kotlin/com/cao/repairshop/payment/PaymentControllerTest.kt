@@ -1,14 +1,13 @@
-﻿package com.cao.repairshop.payment
+package com.cao.repairshop.payment
 
-import com.cao.repairshop.payment.infrastructure.mercadopago.MercadoPagoClient
-import com.cao.repairshop.payment.infrastructure.mercadopago.MercadoPagoPaymentRequest
-import com.cao.repairshop.payment.infrastructure.mercadopago.MercadoPagoPaymentResponse
-import com.cao.repairshop.payment.infrastructure.messaging.PaymentSqsMessenger
-import com.cao.repairshop.payment.infrastructure.persistence.DynamoPaymentRepository
-import com.cao.repairshop.payment.infrastructure.persistence.models.PaymentDynamoItem
-import com.cao.repairshop.payment.infrastructure.web.CreatePaymentRequest
-import com.cao.repairshop.payment.infrastructure.web.PaymentController
-import com.cao.repairshop.payment.infrastructure.web.WebhookNotification
+import com.cao.repairshop.payment.application.usecases.*
+import com.cao.repairshop.payment.domain.Payment
+import com.cao.repairshop.payment.domain.PaymentMethod
+import com.cao.repairshop.payment.domain.PaymentStatus
+import com.cao.repairshop.payment.infrastructure.controller.PaymentController
+import com.cao.repairshop.payment.infrastructure.controller.dtos.CreatePaymentRequest
+import com.cao.repairshop.payment.infrastructure.controller.dtos.RefundPaymentRequest
+import com.cao.repairshop.payment.infrastructure.controller.dtos.WebhookNotification
 import io.mockk.*
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
@@ -18,198 +17,214 @@ import java.util.UUID
 
 class PaymentControllerTest {
 
-    private val repository: DynamoPaymentRepository = mockk(relaxed = true)
-    private val messenger: PaymentSqsMessenger = mockk(relaxed = true)
-    private val mercadoPagoClient: MercadoPagoClient = mockk(relaxed = true)
+    private val createPaymentUseCase: CreatePaymentUseCase = mockk()
+    private val confirmPaymentUseCase: ConfirmPaymentUseCase = mockk()
+    private val refundPaymentUseCase: RefundPaymentUseCase = mockk()
+    private val findPaymentUseCase: FindPaymentUseCase = mockk()
+    private val processWebhookUseCase: ProcessWebhookUseCase = mockk()
+
     private lateinit var controller: PaymentController
 
     @BeforeEach
     fun setUp() {
         clearAllMocks()
-        controller = PaymentController(repository, mercadoPagoClient, messenger)
+        controller = PaymentController(
+            createPaymentUseCase = createPaymentUseCase,
+            confirmPaymentUseCase = confirmPaymentUseCase,
+            refundPaymentUseCase = refundPaymentUseCase,
+            findPaymentUseCase = findPaymentUseCase,
+            processWebhookUseCase = processWebhookUseCase
+        )
     }
 
     @Test
-    fun `POST payment serviceOrderId should invoke Mercado Pago and save payment and invoice`() {
+    fun `POST createPaymentForOrder should delegate to use case and return 201 Created`() {
         val orderId = UUID.randomUUID()
         val customerId = UUID.randomUUID()
         val req = CreatePaymentRequest(orderId = orderId, customerId = customerId, amount = 250.0)
-
-        val mpResponse = MercadoPagoPaymentResponse(
-            paymentId = "mp-pay-999",
-            status = "pending",
-            qrCode = "qr-code-pix-payload"
+        val domainPayment = Payment(
+            id = "pay-123",
+            orderId = orderId,
+            customerId = customerId,
+            amount = 250.0,
+            status = PaymentStatus.PENDING,
+            paymentMethod = PaymentMethod.MERCADO_PAGO_QR,
+            paymentInfo = "qr-code-pix"
         )
-        every { mercadoPagoClient.createPayment(any<MercadoPagoPaymentRequest>()) } returns mpResponse
-        every { repository.savePayment(any()) } just Runs
-        every { repository.saveInvoice(any()) } just Runs
+
+        every { createPaymentUseCase.execute(orderId, req) } returns domainPayment
 
         val res = controller.createPaymentForOrder(orderId, req)
 
         assertEquals(HttpStatus.CREATED, res.statusCode)
         assertNotNull(res.body)
-        assertEquals("mp-pay-999", res.body?.paymentId)
+        assertEquals("pay-123", res.body?.paymentId)
         assertEquals(orderId.toString(), res.body?.serviceOrderId)
         assertEquals(250.0, res.body?.priceValue)
-        verify(exactly = 1) { mercadoPagoClient.createPayment(any()) }
-        verify(exactly = 1) { repository.savePayment(any()) }
-        verify(exactly = 1) { repository.saveInvoice(any()) }
-        verify(exactly = 1) { messenger.notifyPaymentStatus(any(), any(), any(), any(), any(), any(), any(), any()) }
+        verify(exactly = 1) { createPaymentUseCase.execute(orderId, req) }
     }
 
     @Test
-    fun `should create payment via alias POST payments successfully`() {
+    fun `POST createPayment should delegate to use case and return 201 Created`() {
         val orderId = UUID.randomUUID()
         val customerId = UUID.randomUUID()
         val req = CreatePaymentRequest(orderId = orderId, customerId = customerId, amount = 150.0)
-
-        val mpResponse = MercadoPagoPaymentResponse(
-            paymentId = "mp-pay-150",
-            status = "pending",
-            qrCode = "qr-pix"
+        val domainPayment = Payment(
+            id = "pay-456",
+            orderId = orderId,
+            customerId = customerId,
+            amount = 150.0,
+            status = PaymentStatus.PENDING,
+            paymentMethod = PaymentMethod.MERCADO_PAGO_QR
         )
-        every { mercadoPagoClient.createPayment(any<MercadoPagoPaymentRequest>()) } returns mpResponse
-        every { repository.savePayment(any()) } just Runs
-        every { repository.saveInvoice(any()) } just Runs
+
+        every { createPaymentUseCase.execute(orderId, req) } returns domainPayment
 
         val res = controller.createPayment(req)
 
         assertEquals(HttpStatus.CREATED, res.statusCode)
-        assertNotNull(res.body)
         assertEquals(orderId.toString(), res.body?.serviceOrderId)
         assertEquals(150.0, res.body?.priceValue)
+        verify(exactly = 1) { createPaymentUseCase.execute(orderId, req) }
     }
 
     @Test
-    fun `should return 404 when payment not found`() {
-        every { repository.findById("unknown-id") } returns null
+    fun `GET getPaymentById should return 404 when payment not found`() {
+        every { findPaymentUseCase.findById("unknown-id") } returns null
 
         val res = controller.getPaymentById("unknown-id")
 
         assertEquals(HttpStatus.NOT_FOUND, res.statusCode)
+        verify(exactly = 1) { findPaymentUseCase.findById("unknown-id") }
     }
 
     @Test
-    fun `should return payment when found`() {
+    fun `GET getPaymentById should return payment when found`() {
         val orderId = UUID.randomUUID()
         val customerId = UUID.randomUUID()
-        val item = PaymentDynamoItem(
-            paymentId = "pay-123",
-            serviceOrderId = orderId.toString(),
-            customerId = customerId.toString(),
-            priceValue = 250.0
+        val domainPayment = Payment(
+            id = "pay-789",
+            orderId = orderId,
+            customerId = customerId,
+            amount = 350.0,
+            status = PaymentStatus.APPROVED,
+            paymentMethod = PaymentMethod.MERCADO_PAGO_QR
         )
-        every { repository.findById("pay-123") } returns item
 
-        val res = controller.getPaymentById("pay-123")
+        every { findPaymentUseCase.findById("pay-789") } returns domainPayment
+
+        val res = controller.getPaymentById("pay-789")
 
         assertEquals(HttpStatus.OK, res.statusCode)
-        assertEquals(item, res.body)
+        assertEquals("pay-789", res.body?.paymentId)
+        assertEquals("APPROVED", res.body?.status)
     }
 
     @Test
-    fun `should confirm payment successfully when payment exists`() {
-        val id = "pay-confirm-1"
+    fun `GET getPaymentsByOrder should return list of payments`() {
         val orderId = UUID.randomUUID()
         val customerId = UUID.randomUUID()
-        val item = PaymentDynamoItem(
-            pk = "BILLING#$orderId",
-            sk = "PAY#123#$id",
-            paymentId = id,
-            serviceOrderId = orderId.toString(),
-            customerId = customerId.toString(),
-            priceValue = 300.0,
-            status = "PENDING"
+        val payments = listOf(
+            Payment(
+                id = "pay-1",
+                orderId = orderId,
+                customerId = customerId,
+                amount = 100.0,
+                status = PaymentStatus.PENDING,
+                paymentMethod = PaymentMethod.MERCADO_PAGO_QR
+            )
         )
-        every { repository.findById(id) } returns item
-        every { repository.updateStatus(item.pk, item.sk, "APPROVED", "DISPATCHED", "UPDATED") } just Runs
-        every { messenger.sendPaymentSuccessEvent(orderId, id, 300.0) } just Runs
 
-        val res = controller.confirmPayment(id)
+        every { findPaymentUseCase.findByOrderId(orderId) } returns payments
+
+        val res = controller.getPaymentsByOrder(orderId)
+
+        assertEquals(HttpStatus.OK, res.statusCode)
+        assertEquals(1, res.body?.size)
+        assertEquals("pay-1", res.body?.first()?.paymentId)
+    }
+
+    @Test
+    fun `POST confirmPayment should delegate to confirmPaymentUseCase and return 200 OK`() {
+        val orderId = UUID.randomUUID()
+        val customerId = UUID.randomUUID()
+        val confirmedPayment = Payment(
+            id = "pay-conf",
+            orderId = orderId,
+            customerId = customerId,
+            amount = 200.0,
+            status = PaymentStatus.APPROVED,
+            paymentMethod = PaymentMethod.MERCADO_PAGO_QR
+        )
+
+        every { confirmPaymentUseCase.execute("pay-conf") } returns confirmedPayment
+
+        val res = controller.confirmPayment("pay-conf")
 
         assertEquals(HttpStatus.OK, res.statusCode)
         assertEquals("APPROVED", res.body?.status)
-        assertEquals("DISPATCHED", res.body?.dispatchNotificateStatus)
-        verify(exactly = 1) { repository.updateStatus(item.pk, item.sk, "APPROVED", "DISPATCHED", "UPDATED") }
-        verify(exactly = 1) { messenger.sendPaymentSuccessEvent(orderId, id, 300.0) }
+        verify(exactly = 1) { confirmPaymentUseCase.execute("pay-conf") }
     }
 
     @Test
-    fun `should return 404 on confirmPayment when payment does not exist`() {
-        every { repository.findById("non-existent") } returns null
-
-        val res = controller.confirmPayment("non-existent")
-
-        assertEquals(HttpStatus.NOT_FOUND, res.statusCode)
-        verify(exactly = 1) { repository.findById("non-existent") }
-        verify(exactly = 0) { repository.updateStatus(any(), any(), any(), any(), any()) }
-        verify(exactly = 0) { messenger.sendPaymentSuccessEvent(any(), any(), any()) }
-    }
-
-    @Test
-    fun `should process webhook with approved status and notify success`() {
-        val id = "pay-wh-approved"
+    fun `POST refundPayment should delegate to refundPaymentUseCase and return 200 OK`() {
         val orderId = UUID.randomUUID()
         val customerId = UUID.randomUUID()
-        val item = PaymentDynamoItem(
-            pk = "BILLING#$orderId",
-            sk = "PAY#123#$id",
-            paymentId = id,
-            serviceOrderId = orderId.toString(),
-            customerId = customerId.toString(),
-            priceValue = 500.0,
-            status = "PENDING"
+        val refundReq = RefundPaymentRequest(reason = "OS Cancelada pelo cliente")
+        val refundedPayment = Payment(
+            id = "pay-refund",
+            orderId = orderId,
+            customerId = customerId,
+            amount = 200.0,
+            status = PaymentStatus.REFUNDED,
+            paymentMethod = PaymentMethod.MERCADO_PAGO_QR,
+            refundReason = "OS Cancelada pelo cliente"
         )
-        every { repository.findById(id) } returns item
-        every { repository.updateStatus(item.pk, item.sk, "APPROVED", "DISPATCHED", "UPDATED") } just Runs
-        every { messenger.sendPaymentSuccessEvent(orderId, id, 500.0) } just Runs
 
-        val notification = WebhookNotification(id = id, status = "approved")
-        val res = controller.webhook(notification)
+        every { refundPaymentUseCase.executeById("pay-refund", "OS Cancelada pelo cliente") } returns refundedPayment
+
+        val res = controller.refundPayment("pay-refund", refundReq)
 
         assertEquals(HttpStatus.OK, res.statusCode)
-        assertEquals("processed", res.body?.get("status"))
-        verify(exactly = 1) { repository.updateStatus(item.pk, item.sk, "APPROVED", "DISPATCHED", "UPDATED") }
-        verify(exactly = 1) { messenger.sendPaymentSuccessEvent(orderId, id, 500.0) }
+        assertEquals("REFUNDED", res.body?.status)
+        assertEquals("OS Cancelada pelo cliente", res.body?.refundReason)
+        verify(exactly = 1) { refundPaymentUseCase.executeById("pay-refund", "OS Cancelada pelo cliente") }
     }
 
     @Test
-    fun `should process webhook with rejected status without notifying success`() {
-        val id = "pay-wh-rejected"
+    fun `POST refundPaymentByOrder should delegate to refundPaymentUseCase and return 200 OK`() {
         val orderId = UUID.randomUUID()
         val customerId = UUID.randomUUID()
-        val item = PaymentDynamoItem(
-            pk = "BILLING#$orderId",
-            sk = "PAY#123#$id",
-            paymentId = id,
-            serviceOrderId = orderId.toString(),
-            customerId = customerId.toString(),
-            priceValue = 500.0,
-            status = "PENDING"
+        val refundReq = RefundPaymentRequest(reason = "Compensação de cancelamento")
+        val refundedPayment = Payment(
+            id = "pay-refund-order",
+            orderId = orderId,
+            customerId = customerId,
+            amount = 150.0,
+            status = PaymentStatus.REFUNDED,
+            paymentMethod = PaymentMethod.MERCADO_PAGO_QR,
+            refundReason = "Compensação de cancelamento"
         )
-        every { repository.findById(id) } returns item
-        every { repository.updateStatus(item.pk, item.sk, "REJECTED", "DISPATCHED", "PENDING") } just Runs
 
-        val notification = WebhookNotification(id = id, status = "rejected")
-        val res = controller.webhook(notification)
+        every { refundPaymentUseCase.executeByOrderId(orderId, "Compensação de cancelamento") } returns listOf(refundedPayment)
+
+        val res = controller.refundPaymentByOrder(orderId, refundReq)
 
         assertEquals(HttpStatus.OK, res.statusCode)
-        assertEquals("processed", res.body?.get("status"))
-        verify(exactly = 1) { repository.updateStatus(item.pk, item.sk, "REJECTED", "DISPATCHED", "PENDING") }
-        verify(exactly = 0) { messenger.sendPaymentSuccessEvent(any(), any(), any()) }
+        assertEquals(1, res.body?.size)
+        assertEquals("REFUNDED", res.body?.first()?.status)
     }
 
     @Test
-    fun `should return processed on webhook when payment not found`() {
-        every { repository.findById("unknown-webhook") } returns null
+    fun `POST webhook should delegate to processWebhookUseCase and return 200 OK`() {
+        val webhookBody = WebhookNotification(id = "mp-12345", status = "approved")
 
-        val notification = WebhookNotification(id = "unknown-webhook", status = "approved")
-        val res = controller.webhook(notification)
+        every { processWebhookUseCase.execute(webhookBody) } returns true
+
+        val res = controller.webhook(webhookBody)
 
         assertEquals(HttpStatus.OK, res.statusCode)
         assertEquals("processed", res.body?.get("status"))
-        verify(exactly = 1) { repository.findById("unknown-webhook") }
-        verify(exactly = 0) { repository.updateStatus(any(), any(), any(), any(), any()) }
-        verify(exactly = 0) { messenger.sendPaymentSuccessEvent(any(), any(), any()) }
+        verify(exactly = 1) { processWebhookUseCase.execute(webhookBody) }
     }
 }

@@ -1,6 +1,6 @@
-﻿package com.cao.repairshop.payment
+package com.cao.repairshop.payment
 
-import com.cao.repairshop.payment.infrastructure.health.SqsListenerHealthIndicator
+import com.cao.repairshop.payment.core.health.SqsListenerHealthIndicator
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.springframework.boot.health.contributor.Status
@@ -72,6 +72,6 @@ class SqsListenerHealthIndicatorTest {
 
         assertEquals(Status.DOWN, health.status)
         assertTrue(health.details.containsKey("failed_queues"))
-        assertEquals("Heartbeat expirado em filas de pagamento (Possível Silent Zombie Pod)", health.details["reason"])
+        assertEquals("Uma ou mais filas SQS ultrapassaram o tempo limite de heartbeat (possível Silent Zombie Pod)", health.details["reason"])
     }
 }

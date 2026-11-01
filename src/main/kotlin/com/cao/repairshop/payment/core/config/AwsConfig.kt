@@ -1,4 +1,4 @@
-﻿package com.cao.repairshop.payment.infrastructure.config
+package com.cao.repairshop.payment.core.config
 
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Configuration
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
+import software.amazon.awssdk.enhanced.dynamodb.DynamoDbEnhancedClient
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.sqs.SqsClient
@@ -46,8 +47,8 @@ class AwsConfig(
     }
 
     @Bean
-    fun dynamoDbEnhancedClient(dynamoDbClient: DynamoDbClient): software.amazon.awssdk.enhanced.dynamodb.DynamoDbEnhancedClient {
-        return software.amazon.awssdk.enhanced.dynamodb.DynamoDbEnhancedClient.builder()
+    fun dynamoDbEnhancedClient(dynamoDbClient: DynamoDbClient): DynamoDbEnhancedClient {
+        return DynamoDbEnhancedClient.builder()
             .dynamoDbClient(dynamoDbClient)
             .build()
     }

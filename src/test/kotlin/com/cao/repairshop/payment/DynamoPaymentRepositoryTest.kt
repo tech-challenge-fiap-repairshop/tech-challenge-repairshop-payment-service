@@ -1,8 +1,8 @@
-﻿package com.cao.repairshop.payment
+package com.cao.repairshop.payment
 
-import com.cao.repairshop.payment.infrastructure.persistence.DynamoPaymentRepository
-import com.cao.repairshop.payment.infrastructure.persistence.models.InvoiceDynamoItem
-import com.cao.repairshop.payment.infrastructure.persistence.models.PaymentDynamoItem
+import com.cao.repairshop.payment.infrastructure.persistence.dynamo.DynamoPaymentRepository
+import com.cao.repairshop.payment.infrastructure.persistence.dynamo.models.InvoiceDynamoItem
+import com.cao.repairshop.payment.infrastructure.persistence.dynamo.models.PaymentDynamoItem
 import io.mockk.*
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
@@ -133,9 +133,9 @@ class DynamoPaymentRepositoryTest {
         assertEquals(pk, request.key()["PK"]?.s())
         assertEquals(sk, request.key()["SK"]?.s())
         assertTrue(request.updateExpression().contains("#status = :newStatus"))
-        assertTrue(request.updateExpression().contains("#dns = :dns"))
-        assertTrue(request.updateExpression().contains("#ous = :ous"))
+        assertTrue(request.updateExpression().contains("dispatch_notificate_status = :ds"))
+        assertTrue(request.updateExpression().contains("os_update_status = :os"))
         assertEquals("APPROVED", request.expressionAttributeValues()[":newStatus"]?.s())
-        assertEquals("DISPATCHED", request.expressionAttributeValues()[":dns"]?.s())
+        assertEquals("DISPATCHED", request.expressionAttributeValues()[":ds"]?.s())
     }
 }

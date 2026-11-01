@@ -24,6 +24,11 @@ import software.amazon.awssdk.services.sqs.model.CreateQueueRequest
 class CucumberTestcontainersConfig {
 
     companion object {
+        init {
+            System.setProperty("api.version", "1.44")
+            System.setProperty("DOCKER_API_VERSION", "1.44")
+        }
+
         const val TABLE_NAME = "tb-payment-test"
         const val QUEUE_OS_READY = "os-ready-for-payment-queue-test"
         const val QUEUE_NOTIFICATION = "payment-notification-queue-test"

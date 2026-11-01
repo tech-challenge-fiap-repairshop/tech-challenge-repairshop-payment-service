@@ -1,7 +1,7 @@
-﻿package com.cao.repairshop.payment
+package com.cao.repairshop.payment
 
 import com.cao.repairshop.payment.infrastructure.mercadopago.MercadoPagoClient
-import com.cao.repairshop.payment.infrastructure.mercadopago.MercadoPagoPaymentRequest
+import com.cao.repairshop.payment.infrastructure.mercadopago.dtos.MercadoPagoPaymentRequest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -13,7 +13,7 @@ class MercadoPagoClientTest {
 
     @BeforeEach
     fun setUp() {
-        client = MercadoPagoClient(accessToken = "TEST-ACCESS-TOKEN")
+        client = MercadoPagoClient(accessToken = "mock-offline-token")
     }
 
     @Test

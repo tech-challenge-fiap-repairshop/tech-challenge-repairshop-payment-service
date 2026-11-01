@@ -1,4 +1,4 @@
-﻿package com.cao.repairshop.payment.infrastructure.persistence.models
+package com.cao.repairshop.payment.infrastructure.persistence.dynamo.models
 
 import software.amazon.awssdk.enhanced.dynamodb.mapper.annotations.DynamoDbAttribute
 import software.amazon.awssdk.enhanced.dynamodb.mapper.annotations.DynamoDbBean
@@ -8,7 +8,6 @@ import java.time.Instant
 
 /**
  * Representa o item_invoice no DynamoDB tb-payment.
- * Mapeamento fiel do desenho de arquitetura da Fase 4:
  * PK = BILLING#<service_order_id>
  * SK = INV#<timestamp>#<invoice_id>
  */
