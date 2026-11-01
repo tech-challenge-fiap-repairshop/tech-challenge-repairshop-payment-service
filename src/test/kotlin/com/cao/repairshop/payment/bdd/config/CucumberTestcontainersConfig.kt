@@ -110,13 +110,12 @@ class CucumberTestcontainersConfig {
         @JvmStatic
         @DynamicPropertySource
         fun overrideProperties(registry: DynamicPropertyRegistry) {
-            val dynamoEndpoint = localstack.getEndpointOverride(LocalStackContainer.Service.DYNAMODB).toString()
-            val sqsEndpoint = localstack.getEndpointOverride(LocalStackContainer.Service.SQS).toString()
+            System.setProperty("aws.accessKeyId", localstack.accessKey)
+            System.setProperty("aws.secretAccessKey", localstack.secretKey)
+            System.clearProperty("aws.sessionToken")
 
-            registry.add("aws.endpoint-url") { dynamoEndpoint }
+            registry.add("aws.endpoint-url") { localstack.endpoint.toString() }
             registry.add("aws.region") { localstack.region }
-            registry.add("aws.access-key-id") { localstack.accessKey }
-            registry.add("aws.secret-access-key") { localstack.secretKey }
 
             registry.add("dynamodb.table.payment") { TABLE_NAME }
             registry.add("sqs.queue.os-ready-for-payment") { QUEUE_OS_READY }
