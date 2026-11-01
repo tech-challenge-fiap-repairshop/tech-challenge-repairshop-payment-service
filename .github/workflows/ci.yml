@@ -111,7 +111,7 @@ jobs:
           exit 1
 
   # ==========================================================================
-  # STAGE 2 — TEST: Testes unitários + integração + JaCoCo
+  # STAGE 2 — TEST: Testes unitários + integração BDD (Testcontainers) + JaCoCo
   # ==========================================================================
   test:
     name: "🧪 Test"
@@ -272,6 +272,45 @@ jobs:
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
+      - name: Run Smoke Test (Start application container)
+        env:
+          SERVER_PORT: "8082"
+          SQS_HEALTH_CHECK_ENABLED: "false"
+          AWS_REGION: "us-east-1"
+          OTEL_TRACES_EXPORTER: "none"
+          OTEL_METRICS_EXPORTER: "none"
+          OTEL_LOGS_EXPORTER: "none"
+          JAVA_TOOL_OPTIONS: "-Djava.net.preferIPv4Stack=true"
+        run: |
+          docker run -d --name smoke-app --network host \
+            -e SERVER_PORT="$SERVER_PORT" \
+            -e SQS_HEALTH_CHECK_ENABLED="$SQS_HEALTH_CHECK_ENABLED" \
+            -e AWS_REGION="$AWS_REGION" \
+            -e OTEL_TRACES_EXPORTER="$OTEL_TRACES_EXPORTER" \
+            -e OTEL_METRICS_EXPORTER="$OTEL_METRICS_EXPORTER" \
+            -e OTEL_LOGS_EXPORTER="$OTEL_LOGS_EXPORTER" \
+            -e JAVA_TOOL_OPTIONS="$JAVA_TOOL_OPTIONS" \
+            ${{ steps.login-ecr.outputs.registry }}/${{ steps.ecr-target.outputs.repository_name }}:latest
+
+      - name: Verify application startup (Actuator Health Check)
+        run: |
+          echo "Waiting for application to start..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8082/actuator/health | grep -q '"status":"UP"'; then
+              echo "Smoke Test Passed! Application is UP."
+              docker stop smoke-app
+              docker rm smoke-app
+              exit 0
+            fi
+            echo "Waiting..."
+            sleep 2
+          done
+          echo "Smoke Test Failed! Container logs:"
+          docker logs smoke-app
+          docker stop smoke-app
+          docker rm smoke-app
+          exit 1
+
       - name: Push Docker image to Amazon ECR
         run: |
           docker push ${{ steps.login-ecr.outputs.registry }}/${{ steps.ecr-target.outputs.repository_name }}:latest
@@ -325,6 +364,8 @@ jobs:
           aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name "$CLUSTER"
 
       - name: Prepare Deployment & Secrets
+        env:
+          MP_ACCESS_TOKEN: ${{ secrets.MERCADO_PAGO_ACCESS_TOKEN || secrets.MERCADOPAGO_ACCESS_TOKEN }}
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
@@ -337,6 +378,10 @@ jobs:
           
           echo "Using Image: ${ECR_REGISTRY}/${REPO_NAME}:latest"
           sed -i "s|image: .*|image: ${ECR_REGISTRY}/${REPO_NAME}:latest|g" k8s/deployment.yaml
+
+          if [ -n "$MP_ACCESS_TOKEN" ]; then
+            sed -i "s|MERCADO_PAGO_ACCESS_TOKEN: .*|MERCADO_PAGO_ACCESS_TOKEN: ${MP_ACCESS_TOKEN}|g" k8s/secret.yaml
+          fi
 
       - name: Deploy Kubernetes Manifests
         run: |

@@ -29,11 +29,15 @@ class MercadoPagoClient(
         .connectTimeout(Duration.ofSeconds(3))
         .build()
 
+    private fun shouldCallPartnerApi(): Boolean =
+        baseUrl != "https://api.mercadopago.com" ||
+            (!accessToken.isNullOrBlank() && !accessToken.startsWith("mock-offline") && !accessToken.startsWith("dev-dummy"))
+
     @CircuitBreaker(name = "mercadoPagoCircuitBreaker", fallbackMethod = "fallbackCreatePayment")
     fun createPayment(request: MercadoPagoPaymentRequest): MercadoPagoPaymentResponse {
         logger.info("Chamando gateway do Mercado Pago ({}) para OS {} no valor de R$ {}", baseUrl, request.orderId, request.amount)
 
-        if (baseUrl != "https://api.mercadopago.com" || (!accessToken.isNullOrBlank() && !accessToken.startsWith("mock-offline"))) {
+        if (shouldCallPartnerApi()) {
             val payload = mapOf(
                 "transaction_amount" to request.amount,
                 "description" to request.description,
@@ -109,7 +113,7 @@ class MercadoPagoClient(
     fun refundPayment(paymentId: String, amount: Double, reason: String?): MercadoPagoRefundResponse {
         logger.info("Iniciando chamada de estorno no Mercado Pago para PaymentId {} no valor de R$ {}", paymentId, amount)
 
-        if (baseUrl != "https://api.mercadopago.com" || (!accessToken.isNullOrBlank() && !accessToken.startsWith("mock-offline"))) {
+        if (shouldCallPartnerApi()) {
             val payload = mapOf(
                 "amount" to amount,
                 "metadata" to mapOf("reason" to (reason ?: "Cancelamento compensatorio"))
