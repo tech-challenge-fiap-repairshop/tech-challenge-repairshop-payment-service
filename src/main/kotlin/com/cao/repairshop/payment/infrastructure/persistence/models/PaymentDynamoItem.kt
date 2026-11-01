@@ -67,5 +67,11 @@ data class PaymentDynamoItem(
     var dispatchNotificateStatus: String = "PENDING",
 
     @get:DynamoDbAttribute("origin_trace_id")
-    var originTraceId: String? = null
+    var originTraceId: String? = null,
+
+    @get:DynamoDbAttribute("refund_reason")
+    var refundReason: String? = null,
+
+    @get:DynamoDbAttribute("refund_date")
+    var refundDate: String? = null
 )

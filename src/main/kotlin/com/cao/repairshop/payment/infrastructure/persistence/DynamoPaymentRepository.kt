@@ -1,4 +1,4 @@
-﻿package com.cao.repairshop.payment.infrastructure.persistence
+package com.cao.repairshop.payment.infrastructure.persistence
 
 import com.cao.repairshop.payment.infrastructure.persistence.models.InvoiceDynamoItem
 import com.cao.repairshop.payment.infrastructure.persistence.models.PaymentDynamoItem
@@ -90,8 +90,7 @@ class DynamoPaymentRepository(
             .tableName(tableName)
             .filterExpression("payment_id = :pid OR id = :pid")
             .expressionAttributeValues(mapOf(":pid" to AttributeValue.builder().s(id).build()))
-            .limit(1)
-            .build()
+                        .build()
 
         val response = runCatching { dynamoDbClient.scan(request) }.getOrNull()
         val item = response?.items()?.firstOrNull() ?: return null
@@ -184,6 +183,52 @@ class DynamoPaymentRepository(
         logger.info("Status do pagamento atualizado no DynamoDB: PK={}, SK={} -> {}", pk, sk, newStatus)
     }
 
+    /**
+     * Registra estorno/reembolso de pagamento no DynamoDB
+     */
+    fun refundPayment(pk: String, sk: String, reason: String) {
+        val key = mapOf(
+            "PK" to AttributeValue.builder().s(pk).build(),
+            "SK" to AttributeValue.builder().s(sk).build()
+        )
+        val now = Instant.now().toString()
+        val request = UpdateItemRequest.builder()
+            .tableName(tableName)
+            .key(key)
+            .updateExpression("SET #status = :newStatus, #rr = :reason, #rd = :refundDate, #dns = :dns, #ous = :ous")
+            .expressionAttributeNames(mapOf(
+                "#status" to "status",
+                "#rr" to "refund_reason",
+                "#rd" to "refund_date",
+                "#dns" to "dispatch_notificate_status",
+                "#ous" to "os_update_status"
+            ))
+            .expressionAttributeValues(mapOf(
+                ":newStatus" to AttributeValue.builder().s("REFUNDED").build(),
+                ":reason" to AttributeValue.builder().s(reason).build(),
+                ":refundDate" to AttributeValue.builder().s(now).build(),
+                ":dns" to AttributeValue.builder().s("DISPATCHED").build(),
+                ":ous" to AttributeValue.builder().s("UPDATED").build()
+            ))
+            .build()
+
+        dynamoDbClient.updateItem(request)
+        logger.info("Pagamento estornado no DynamoDB: PK={}, SK={}, Motivo={}", pk, sk, reason)
+    }
+
+    // Sobrecarga por ID para estorno
+    fun refundPaymentById(id: String, reason: String): PaymentDynamoItem? {
+        val payment = findById(id) ?: return null
+        refundPayment(payment.pk, payment.sk, reason)
+        return payment.copy(
+            status = "REFUNDED",
+            refundReason = reason,
+            refundDate = Instant.now().toString(),
+            dispatchNotificateStatus = "DISPATCHED",
+            osUpdateStatus = "UPDATED"
+        )
+    }
+
     // Sobrecarga de conveniência para atualizar por paymentId
     fun updateStatus(id: String, newStatus: String, dispatchStatus: String? = null) {
         val payment = findById(id) ?: return
@@ -217,7 +262,9 @@ class DynamoPaymentRepository(
             serviceOrderDispatchNotificate = item["service_order_dispatch_notificate"]?.s() ?: "PENDING",
             clientDispatchNotificate = item["client_dispatch_notificate"]?.s() ?: "PENDING",
             dispatchNotificateStatus = item["dispatch_notificate_status"]?.s() ?: "PENDING",
-            originTraceId = item["origin_trace_id"]?.s()
+            originTraceId = item["origin_trace_id"]?.s(),
+            refundReason = item["refund_reason"]?.s(),
+            refundDate = item["refund_date"]?.s()
         )
     }
 }

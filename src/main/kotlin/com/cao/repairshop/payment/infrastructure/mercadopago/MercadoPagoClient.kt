@@ -1,9 +1,16 @@
-﻿package com.cao.repairshop.payment.infrastructure.mercadopago
+package com.cao.repairshop.payment.infrastructure.mercadopago
 
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.time.Duration
 import java.util.UUID
 
 data class MercadoPagoPaymentRequest(
@@ -22,6 +29,14 @@ data class MercadoPagoPaymentResponse(
     val isFallback: Boolean = false
 )
 
+data class MercadoPagoRefundResponse(
+    val refundId: String,
+    val paymentId: String,
+    val status: String,
+    val amount: Double,
+    val isFallback: Boolean = false
+)
+
 /**
  * Cliente de Integração com o Mercado Pago protegido por Circuit Breaker (Resilience4j)
  * Conforme o desenho de arquitetura da Fase 4.
@@ -29,40 +44,77 @@ data class MercadoPagoPaymentResponse(
 @Component
 class MercadoPagoClient(
     @Value("\${mercadopago.access-token:#{null}}")
-    private val accessToken: String?
+    private val accessToken: String?,
+    @Value("\${mercadopago.base-url:https://api.mercadopago.com}")
+    private val baseUrl: String = "https://api.mercadopago.com"
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
+    private val objectMapper: ObjectMapper = jacksonObjectMapper().findAndRegisterModules()
+    private val httpClient: HttpClient = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(3))
+        .build()
 
     /**
      * Gera ordem de pagamento / QR Code Pix no Mercado Pago com proteção de Circuit Breaker
      */
     @CircuitBreaker(name = "mercadoPagoCircuitBreaker", fallbackMethod = "fallbackCreatePayment")
     fun createPayment(request: MercadoPagoPaymentRequest): MercadoPagoPaymentResponse {
-        logger.info("Iniciando chamada ao gateway do Mercado Pago para OS {} no valor de R$ {}", request.orderId, request.amount)
+        logger.info("Iniciando chamada ao gateway do Mercado Pago ({}) para OS {} no valor de R$ {}", baseUrl, request.orderId, request.amount)
 
-        // Se houver token real configurado, faz chamada externa HTTP; caso contrário ou em simulação, valida a transação
-        if (accessToken.isNullOrBlank() || accessToken.startsWith("TEST-") || accessToken == "sandbox") {
-            // Simulação de transação real na esteira sandbox do Mercado Pago
-            val paymentId = "MP-" + UUID.randomUUID().toString().take(12).uppercase()
-            val qrCodePix = "00020126580014BR.GOV.BCB.PIX0136${UUID.randomUUID()}520400005303986540${request.amount}5802BR5925OFICINA REPAIRSHOP S/A6009SAO PAULO62070503***6304"
-
-            logger.info("Pagamento gerado com sucesso via Mercado Pago: PaymentId={}", paymentId)
-            return MercadoPagoPaymentResponse(
-                paymentId = paymentId,
-                status = "PENDING",
-                qrCode = qrCodePix,
-                qrCodeBase64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
-                ticketUrl = "https://www.mercadopago.com.br/payments/$paymentId/ticket",
-                isFallback = false
+        if (baseUrl != "https://api.mercadopago.com" || (!accessToken.isNullOrBlank() && !accessToken.startsWith("mock-offline"))) {
+            val payload = mapOf(
+                "transaction_amount" to request.amount,
+                "description" to request.description,
+                "payment_method_id" to "pix",
+                "payer" to mapOf("email" to "cliente@repairshop.com"),
+                "external_reference" to request.orderId.toString()
             )
+            val body = objectMapper.writeValueAsString(payload)
+
+            val httpReqBuilder = HttpRequest.newBuilder()
+                .uri(URI.create("$baseUrl/v1/payments"))
+                .timeout(Duration.ofSeconds(5))
+                .header("Content-Type", "application/json")
+                .header("X-Idempotency-Key", UUID.randomUUID().toString())
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+
+            if (!accessToken.isNullOrBlank()) {
+                httpReqBuilder.header("Authorization", "Bearer $accessToken")
+            }
+
+            val httpResp = httpClient.send(httpReqBuilder.build(), HttpResponse.BodyHandlers.ofString())
+            if (httpResp.statusCode() in 200..299) {
+                val json = runCatching { objectMapper.readTree(httpResp.body()) }.getOrNull()
+                val paymentId = json?.get("id")?.asText() ?: ("MP-" + UUID.randomUUID().toString().take(10).uppercase())
+                val qrCode = json?.path("point_of_interaction")?.path("transaction_data")?.path("qr_code")?.asText()
+                    ?: ("00020126580014BR.GOV.BCB.PIX0136${UUID.randomUUID()}520400005303986540${request.amount}5802BR5925OFICINA REPAIRSHOP6009SAO PAULO")
+                val ticketUrl = json?.path("point_of_interaction")?.path("transaction_data")?.path("ticket_url")?.asText()
+                    ?: "https://www.mercadopago.com.br/payments/$paymentId/ticket"
+
+                logger.info("Pagamento gerado com sucesso via endpoint Mercado Pago: PaymentId={}", paymentId)
+                return MercadoPagoPaymentResponse(
+                    paymentId = paymentId,
+                    status = "PENDING",
+                    qrCode = qrCode,
+                    qrCodeBase64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                    ticketUrl = ticketUrl,
+                    isFallback = false
+                )
+            } else {
+                logger.warn("Erro ao chamar endpoint Mercado Pago: HTTP {} - {}", httpResp.statusCode(), httpResp.body())
+                throw RuntimeException("Falha na chamada ao Mercado Pago: HTTP ${httpResp.statusCode()}")
+            }
         }
 
-        // Chamada real ao endpoint da API do Mercado Pago caso configurado em produção
-        val paymentId = "MP-PROD-" + UUID.randomUUID().toString().take(10).uppercase()
+        // Simulação fallback offline quando não há token e está na URL padrão
+        val paymentId = "MP-" + UUID.randomUUID().toString().take(12).uppercase()
+        val qrCodePix = "00020126580014BR.GOV.BCB.PIX0136${UUID.randomUUID()}520400005303986540${request.amount}5802BR5925OFICINA REPAIRSHOP S/A6009SAO PAULO62070503***6304"
+
         return MercadoPagoPaymentResponse(
             paymentId = paymentId,
             status = "PENDING",
-            qrCode = "00020126580014BR.GOV.BCB.PIX0136${UUID.randomUUID()}520400005303986540${request.amount}5802BR5925OFICINA REPAIRSHOP S/A",
+            qrCode = qrCodePix,
+            qrCodeBase64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
             ticketUrl = "https://www.mercadopago.com.br/payments/$paymentId/ticket",
             isFallback = false
         )
@@ -83,6 +135,76 @@ class MercadoPagoClient(
             status = "PENDING",
             qrCode = contingenceQrCode,
             ticketUrl = "https://oficina-repairshop.local/contingency-receipt/$fallbackPaymentId",
+            isFallback = true
+        )
+    }
+
+    /**
+     * Realiza o estorno/reembolso no Mercado Pago para compensação da Saga
+     */
+    @CircuitBreaker(name = "mercadoPagoCircuitBreaker", fallbackMethod = "fallbackRefundPayment")
+    fun refundPayment(paymentId: String, amount: Double, reason: String?): MercadoPagoRefundResponse {
+        logger.info("Iniciando chamada de estorno ao gateway do Mercado Pago ({}) para PaymentId {} no valor de R$ {}", baseUrl, paymentId, amount)
+
+        if (baseUrl != "https://api.mercadopago.com" || (!accessToken.isNullOrBlank() && !accessToken.startsWith("mock-offline"))) {
+            val payload = mapOf(
+                "amount" to amount,
+                "metadata" to mapOf("reason" to (reason ?: "Cancelamento compensatorio"))
+            )
+            val body = objectMapper.writeValueAsString(payload)
+
+            val httpReqBuilder = HttpRequest.newBuilder()
+                .uri(URI.create("$baseUrl/v1/payments/$paymentId/refunds"))
+                .timeout(Duration.ofSeconds(5))
+                .header("Content-Type", "application/json")
+                .header("X-Idempotency-Key", UUID.randomUUID().toString())
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+
+            if (!accessToken.isNullOrBlank()) {
+                httpReqBuilder.header("Authorization", "Bearer $accessToken")
+            }
+
+            val httpResp = httpClient.send(httpReqBuilder.build(), HttpResponse.BodyHandlers.ofString())
+            if (httpResp.statusCode() in 200..299) {
+                val json = runCatching { objectMapper.readTree(httpResp.body()) }.getOrNull()
+                val refundId = json?.get("id")?.asText() ?: ("REF-MP-" + UUID.randomUUID().toString().take(10).uppercase())
+                logger.info("Estorno aprovado pelo Mercado Pago: RefundId={}", refundId)
+                return MercadoPagoRefundResponse(
+                    refundId = refundId,
+                    paymentId = paymentId,
+                    status = "REFUNDED",
+                    amount = amount,
+                    isFallback = false
+                )
+            } else {
+                logger.warn("Erro ao solicitar estorno no Mercado Pago: HTTP {} - {}", httpResp.statusCode(), httpResp.body())
+                throw RuntimeException("Falha no estorno do Mercado Pago: HTTP ${httpResp.statusCode()}")
+            }
+        }
+
+        val refundId = "REF-MP-" + UUID.randomUUID().toString().take(10).uppercase()
+        return MercadoPagoRefundResponse(
+            refundId = refundId,
+            paymentId = paymentId,
+            status = "REFUNDED",
+            amount = amount,
+            isFallback = false
+        )
+    }
+
+    /**
+     * Fallback para estorno quando o Circuit Breaker abre
+     */
+    fun fallbackRefundPayment(paymentId: String, amount: Double, reason: String?, t: Throwable): MercadoPagoRefundResponse {
+        logger.warn("Circuit Breaker acionado para estorno no Mercado Pago no PaymentId {}. Motivo: {}. Registrando estorno de contingência...",
+            paymentId, t.message)
+
+        val fallbackRefundId = "FALLBACK-REF-" + UUID.randomUUID().toString().take(8).uppercase()
+        return MercadoPagoRefundResponse(
+            refundId = fallbackRefundId,
+            paymentId = paymentId,
+            status = "REFUNDED",
+            amount = amount,
             isFallback = true
         )
     }

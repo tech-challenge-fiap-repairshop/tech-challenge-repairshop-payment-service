@@ -34,14 +34,15 @@ data class PaymentSuccessEvent(
 )
 
 data class PaymentNotificationEvent(
-    val eventType: String, // ready_for_payment, payment_approved, payment_refused
+    val eventType: String, // ready_for_payment, payment_approved, payment_refused, payment_refunded
     val orderId: UUID,
     val customerId: UUID,
     val paymentId: String,
     val amount: Double,
     val status: String,
     val qrCode: String? = null,
-    val ticketUrl: String? = null
+    val ticketUrl: String? = null,
+    val reason: String? = null
 )
 
 @Component
@@ -231,7 +232,8 @@ class PaymentSqsMessenger(
         amount: Double,
         status: String,
         qrCode: String? = null,
-        ticketUrl: String? = null
+        ticketUrl: String? = null,
+        reason: String? = null
     ) {
         val queueUrl = getQueueUrl(paymentNotificationQueue)
         val event = PaymentNotificationEvent(
@@ -242,7 +244,8 @@ class PaymentSqsMessenger(
             amount = amount,
             status = status,
             qrCode = qrCode,
-            ticketUrl = ticketUrl
+            ticketUrl = ticketUrl,
+            reason = reason
         )
         val body = objectMapper.writeValueAsString(event)
 

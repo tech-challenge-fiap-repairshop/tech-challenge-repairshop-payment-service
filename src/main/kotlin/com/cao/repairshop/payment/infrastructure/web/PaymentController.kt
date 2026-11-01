@@ -1,4 +1,4 @@
-﻿package com.cao.repairshop.payment.infrastructure.web
+package com.cao.repairshop.payment.infrastructure.web
 
 import com.cao.repairshop.payment.infrastructure.mercadopago.MercadoPagoClient
 import com.cao.repairshop.payment.infrastructure.mercadopago.MercadoPagoPaymentRequest
@@ -25,6 +25,10 @@ data class WebhookNotification(
     val id: String,
     val status: String,
     val orderId: UUID? = null
+)
+
+data class RefundPaymentRequest(
+    val reason: String? = "Inviabilidade técnica na execução da OS"
 )
 
 @RestController
@@ -156,6 +160,62 @@ class PaymentController(
         }
 
         return ResponseEntity.ok(updatedPayment)
+    }
+
+    @PostMapping("/payment/{id}/refund", "/payments/{id}/refund")
+    @Operation(summary = "Realiza estorno/reembolso no Mercado Pago para compensação da Saga Pattern")
+    fun refundPayment(
+        @PathVariable id: String,
+        @RequestBody(required = false) request: RefundPaymentRequest?
+    ): ResponseEntity<PaymentDynamoItem> {
+        val payment = paymentRepository.findById(id) ?: return ResponseEntity.notFound().build()
+        val reason = request?.reason ?: "Inviabilidade técnica na execução da OS"
+
+        // 1. Aciona estorno no Mercado Pago via Circuit Breaker
+        val refundResponse = mercadoPagoClient.refundPayment(payment.paymentId, payment.priceValue, reason)
+
+        // 2. Registra estorno no DynamoDB
+        val updatedPayment = paymentRepository.refundPaymentById(payment.paymentId, reason) ?: payment.copy(
+            status = "REFUNDED",
+            refundReason = reason,
+            refundDate = Instant.now().toString()
+        )
+
+        // 3. Notifica clientes / mensageria sobre o estorno compensatório
+        val orderId = runCatching { UUID.fromString(payment.serviceOrderId) }.getOrNull()
+        if (orderId != null) {
+            val custId = runCatching { UUID.fromString(payment.customerId) }.getOrDefault(UUID.randomUUID())
+            sqsMessenger.notifyPaymentStatus(
+                eventType = "payment_refunded",
+                orderId = orderId,
+                customerId = custId,
+                paymentId = payment.paymentId,
+                amount = payment.priceValue,
+                status = "REFUNDED",
+                reason = reason
+            )
+        }
+
+        return ResponseEntity.ok(updatedPayment)
+    }
+
+    @PostMapping("/payment/order/{serviceOrderId}/refund")
+    @Operation(summary = "Realiza estorno/reembolso de todos os pagamentos da OS para cancelamento compensatório")
+    fun refundPaymentByOrder(
+        @PathVariable serviceOrderId: UUID,
+        @RequestBody(required = false) request: RefundPaymentRequest?
+    ): ResponseEntity<List<PaymentDynamoItem>> {
+        val payments = paymentRepository.findByServiceOrderId(serviceOrderId)
+        if (payments.isEmpty()) return ResponseEntity.notFound().build()
+
+        val refundedList = mutableListOf<PaymentDynamoItem>()
+        for (payment in payments) {
+            val response = refundPayment(payment.paymentId, request)
+            if (response.statusCode.is2xxSuccessful && response.body != null) {
+                refundedList.add(response.body!!)
+            }
+        }
+        return ResponseEntity.ok(refundedList)
     }
 
     @PostMapping("/payment/webhook", "/payments/webhook")
