@@ -22,6 +22,12 @@ class ConfirmPaymentUseCaseImpl(
         val payment = paymentGateway.findById(paymentId)
             ?: throw PaymentNotFoundException("Pagamento não encontrado: $paymentId")
 
+        // Idempotência: Se o pagamento já foi aprovado anteriormente, retorna sem duplicar eventos
+        if (payment.status == PaymentStatus.APPROVED) {
+            logger.info("Pagamento já se encontra aprovado (idempotência): paymentId={}", payment.id)
+            return payment
+        }
+
         payment.approve()
         val updated = paymentGateway.updateStatus(payment.id, PaymentStatus.APPROVED, "UPDATED", "DISPATCHED")
             ?: payment
@@ -41,3 +47,4 @@ class ConfirmPaymentUseCaseImpl(
         return updated
     }
 }
+

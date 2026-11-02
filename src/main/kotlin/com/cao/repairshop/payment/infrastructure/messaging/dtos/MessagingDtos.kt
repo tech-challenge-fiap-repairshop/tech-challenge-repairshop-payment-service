@@ -26,3 +26,4 @@ data class PaymentNotificationEvent(
     val ticketUrl: String? = null,
     val reason: String? = null
 )
+

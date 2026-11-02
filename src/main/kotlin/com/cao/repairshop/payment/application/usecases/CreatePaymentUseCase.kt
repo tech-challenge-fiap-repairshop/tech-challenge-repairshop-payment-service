@@ -7,3 +7,4 @@ import java.util.UUID
 interface CreatePaymentUseCase {
     fun execute(orderId: UUID, request: CreatePaymentRequest): Payment
 }
+

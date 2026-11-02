@@ -8,3 +8,4 @@ data class CreatePaymentRequest(
     val amount: Double,
     val paymentMethod: String? = "MERCADO_PAGO_QR"
 )
+

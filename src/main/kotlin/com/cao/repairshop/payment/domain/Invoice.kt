@@ -17,3 +17,4 @@ data class Invoice(
         require(amount >= 0.0) { "O valor da fatura não pode ser negativo" }
     }
 }
+

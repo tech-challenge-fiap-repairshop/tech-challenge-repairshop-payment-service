@@ -5,3 +5,4 @@ import com.cao.repairshop.payment.infrastructure.controller.dtos.WebhookNotifica
 interface ProcessWebhookUseCase {
     fun execute(notification: WebhookNotification): Boolean
 }
+

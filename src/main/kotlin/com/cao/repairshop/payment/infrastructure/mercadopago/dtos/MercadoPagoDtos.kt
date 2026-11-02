@@ -42,3 +42,4 @@ data class MercadoPagoRefundResponse(
     val amount: Double,
     val isFallback: Boolean = false
 )
+

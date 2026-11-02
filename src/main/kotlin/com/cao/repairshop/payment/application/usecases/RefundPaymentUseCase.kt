@@ -7,3 +7,4 @@ interface RefundPaymentUseCase {
     fun executeById(paymentId: String, reason: String?): Payment
     fun executeByOrderId(orderId: UUID, reason: String?): List<Payment>
 }
+

@@ -7,3 +7,4 @@ interface InvoiceGateway {
     fun save(invoice: Invoice): Invoice
     fun findByOrderId(orderId: UUID): List<Invoice>
 }
+

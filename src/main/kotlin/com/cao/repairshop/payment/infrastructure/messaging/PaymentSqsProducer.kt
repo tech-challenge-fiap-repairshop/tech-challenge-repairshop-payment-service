@@ -92,3 +92,4 @@ class PaymentSqsProducer(
         logger.info("Publicado evento {} para OS {} em {}", eventType, orderId, paymentNotificationQueue)
     }
 }
+

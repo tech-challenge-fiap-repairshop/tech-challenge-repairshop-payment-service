@@ -44,3 +44,22 @@ Funcionalidade: Gestão do Ciclo de Vida de Pagamentos, Integração Mercado Pag
     E o pagamento deve ser registrado com método "MERCADO_PAGO_CONTINGENCY"
     E o QR Code de contingência deve ser disponibilizado para o cliente
 
+  Cenário: Geração automática de pagamento via evento assíncrono SQS da Ordem de Serviço finalizada
+    Dado que uma notificação de Ordem de Serviço finalizada no valor de 280.00 é publicada na fila de OS prontas
+    Quando o consumidor de mensageria SQS processa o evento de OS finalizada
+    Então a cobrança deve ser registrada no DynamoDB com status "PENDING"
+    E uma fatura deve ser gerada no DynamoDB vinculada à Ordem de Serviço
+    E uma notificação de cobrança pendente deve ser enviada para a fila de clientes
+
+  Cenário: Compensação da Saga por Ordem de Serviço - Estorno em lote
+    Dado que existe um pagamento aprovado para a Ordem de Serviço no valor de 600.00
+    Quando a solicitação de estorno é realizada informando o identificador da Ordem de Serviço com o motivo "Cancelamento total da OS pelo cliente"
+    Então o estorno de todos os pagamentos daquela Ordem de Serviço deve ser concluído com status "REFUNDED"
+    E o motivo e a data do estorno devem ser registrados no DynamoDB
+    E um evento de estorno deve ser publicado para notificação
+
+  Cenário: Bloqueio de integridade financeira - Proibição de estorno para pagamento rejeitado
+    Dado que existe uma cobrança que foi recusada para uma Ordem de Serviço no valor de 150.00
+    Quando o atendente tenta realizar o estorno daquela cobrança recusada
+    Então a operação deve ser rejeitada com erro de transição inválida ou estado incompatível
+    E o status do pagamento no DynamoDB deve permanecer "REJECTED"

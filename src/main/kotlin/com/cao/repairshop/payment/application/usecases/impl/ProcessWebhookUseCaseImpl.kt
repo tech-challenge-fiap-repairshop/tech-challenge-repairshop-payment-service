@@ -28,6 +28,12 @@ class ProcessWebhookUseCaseImpl(
         val newStatus = if (isApproved) PaymentStatus.APPROVED else PaymentStatus.REJECTED
         val osStatus = if (isApproved) "UPDATED" else "PENDING"
 
+        // Idempotência: Se o pagamento já se encontra no status final notificado, encerra sem duplicar eventos
+        if (payment.status == newStatus) {
+            logger.info("Webhook ignorado pois status atual ({}) é idêntico ao notificado (idempotência): paymentId={}", payment.status, payment.id)
+            return true
+        }
+
         paymentGateway.updateStatus(payment.id, newStatus, osStatus, "DISPATCHED")
 
         if (isApproved) {
@@ -47,3 +53,4 @@ class ProcessWebhookUseCaseImpl(
         return true
     }
 }
+

@@ -7,3 +7,4 @@ interface FindPaymentUseCase {
     fun findById(id: String): Payment?
     fun findByOrderId(orderId: UUID): List<Payment>
 }
+

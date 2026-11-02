@@ -6,7 +6,10 @@ import com.cao.repairshop.payment.infrastructure.controller.dtos.CreatePaymentRe
 import com.cao.repairshop.payment.infrastructure.controller.dtos.PaymentResponse
 import com.cao.repairshop.payment.infrastructure.controller.dtos.RefundPaymentRequest
 import com.cao.repairshop.payment.infrastructure.controller.dtos.WebhookNotification
+import com.cao.repairshop.payment.infrastructure.messaging.PaymentSqsConsumer
+import com.cao.repairshop.payment.infrastructure.messaging.dtos.OsReadyForPaymentInboundEvent
 import com.cao.repairshop.payment.infrastructure.persistence.dynamo.DynamoPaymentRepository
+import com.fasterxml.jackson.databind.ObjectMapper
 import io.cucumber.java.After
 import io.cucumber.java.Before
 import io.cucumber.java.pt.Dado
@@ -27,7 +30,9 @@ class PaymentStepDefinitions(
     private val paymentRepository: DynamoPaymentRepository,
     private val dynamoDbClient: DynamoDbClient,
     private val sqsClient: SqsClient,
-    private val circuitBreakerRegistry: CircuitBreakerRegistry
+    private val circuitBreakerRegistry: CircuitBreakerRegistry,
+    private val paymentSqsConsumer: PaymentSqsConsumer,
+    private val objectMapper: ObjectMapper
 ) {
 
     private var currentOrderId: UUID = UUID.randomUUID()
@@ -35,12 +40,18 @@ class PaymentStepDefinitions(
     private var currentAmount: Double = 0.0
     private var lastCreatedPayment: PaymentResponse? = null
     private var lastPaymentResponse: ResponseEntity<PaymentResponse>? = null
+    private var lastRefundResponseList: ResponseEntity<List<PaymentResponse>>? = null
     private var lastRefundReason: String? = null
+    private var lastException: Throwable? = null
 
     @Before
     fun setup() {
         CucumberTestcontainersConfig.resetWireMock()
         circuitBreakerRegistry.circuitBreaker("mercadoPagoCircuitBreaker").transitionToClosedState()
+        lastException = null
+        lastRefundResponseList = null
+        lastCreatedPayment = null
+        lastPaymentResponse = null
     }
 
     @After
@@ -55,6 +66,7 @@ class PaymentStepDefinitions(
         assertNotNull(paymentRepository)
         assertNotNull(dynamoDbClient)
         assertNotNull(sqsClient)
+        assertNotNull(paymentSqsConsumer)
     }
 
     @E("o gateway de pagamentos do Mercado Pago está disponível para transações")
@@ -95,10 +107,11 @@ class PaymentStepDefinitions(
 
     @E("a cobrança deve ser registrada no DynamoDB com status {string}")
     fun cobrancaRegistradaNoDynamoDb(statusEsperado: String) {
-        val payment = lastCreatedPayment ?: fail("Nenhum pagamento criado")
-        val saved = paymentRepository.findById(payment.paymentId)
-        assertNotNull(saved, "Pagamento não encontrado no DynamoDB")
-        assertEquals(statusEsperado, saved!!.status)
+        val saved = lastCreatedPayment?.let { paymentRepository.findById(it.paymentId) }
+            ?: paymentRepository.findByServiceOrderId(currentOrderId).firstOrNull()
+            ?: fail("Nenhum pagamento encontrado para a OS $currentOrderId no DynamoDB")
+
+        assertEquals(statusEsperado, saved.status)
         assertEquals(currentAmount, saved.priceValue)
     }
 
@@ -306,5 +319,125 @@ class PaymentStepDefinitions(
         val payment = lastCreatedPayment ?: fail("Nenhum pagamento retornado")
         assertNotNull(payment.paymentInfo)
         assertTrue(payment.paymentInfo.contains("contingencia-oficina-repairshop"), "QR Code deveria ser o de contingência: ${payment.paymentInfo}")
+    }
+
+    // =========================================================================
+    // CENÁRIO 6: Geração automática via evento assíncrono SQS (Saga Coreografada)
+    // =========================================================================
+
+    @Dado("que uma notificação de Ordem de Serviço finalizada no valor de {double} é publicada na fila de OS prontas")
+    fun notificacaoOsFinalizadaPublicada(valor: Double) {
+        currentOrderId = UUID.randomUUID()
+        currentCustomerId = UUID.randomUUID()
+        currentAmount = valor
+
+        val event = OsReadyForPaymentInboundEvent(
+            orderId = currentOrderId,
+            customerId = currentCustomerId,
+            amount = currentAmount
+        )
+        val queueUrl = sqsClient.getQueueUrl { it.queueName(CucumberTestcontainersConfig.QUEUE_OS_READY) }.queueUrl()
+        sqsClient.sendMessage {
+            it.queueUrl(queueUrl).messageBody(objectMapper.writeValueAsString(event))
+        }
+    }
+
+    @Quando("o consumidor de mensageria SQS processa o evento de OS finalizada")
+    fun consumidorSqsProcessaEvento() {
+        paymentSqsConsumer.pollOsReadyForPayment()
+    }
+
+    @E("uma notificação de cobrança pendente deve ser enviada para a fila de clientes")
+    fun notificacaoCobrancaPendenteEnviada() {
+        val queueUrl = sqsClient.getQueueUrl { it.queueName(CucumberTestcontainersConfig.QUEUE_NOTIFICATION) }.queueUrl()
+        val receiveResponse = sqsClient.receiveMessage { it.queueUrl(queueUrl).maxNumberOfMessages(10).waitTimeSeconds(1) }
+        assertTrue(receiveResponse.hasMessages(), "Nenhuma notificação encontrada na fila payment-notification-queue-test")
+        val msgBody = receiveResponse.messages().first().body()
+        assertTrue(msgBody.contains("ready_for_payment") || msgBody.contains("PENDING"))
+    }
+
+    // =========================================================================
+    // CENÁRIO 7: Compensação da Saga por Ordem de Serviço (Estorno em lote)
+    // =========================================================================
+
+    @Quando("a solicitação de estorno é realizada informando o identificador da Ordem de Serviço com o motivo {string}")
+    fun solicitacaoEstornoPorOrdemDeServico(motivo: String) {
+        lastRefundReason = motivo
+        val refundReq = RefundPaymentRequest(reason = motivo)
+        val response = paymentController.refundPaymentByOrder(currentOrderId, refundReq)
+        lastRefundResponseList = response
+        if (response.body?.isNotEmpty() == true) {
+            lastCreatedPayment = response.body?.first()
+        }
+    }
+
+    @Então("o estorno de todos os pagamentos daquela Ordem de Serviço deve ser concluído com status {string}")
+    fun estornoTodosPagamentosConcluido(statusEsperado: String) {
+        assertNotNull(lastRefundResponseList, "Resposta de estorno da OS não deve ser nula")
+        assertTrue(lastRefundResponseList!!.statusCode.is2xxSuccessful)
+        val list = lastRefundResponseList!!.body
+        assertNotNull(list)
+        assertFalse(list!!.isEmpty(), "A lista de pagamentos estornados não deveria estar vazia")
+        list.forEach { p ->
+            assertEquals(statusEsperado, p.status)
+        }
+    }
+
+    // =========================================================================
+    // CENÁRIO 8: Bloqueio de integridade financeira (Proibição de estorno rejeitado)
+    // =========================================================================
+
+    @Dado("que existe uma cobrança que foi recusada para uma Ordem de Serviço no valor de {double}")
+    fun cobrancaRecusadaCriada(valor: Double) {
+        currentOrderId = UUID.randomUUID()
+        currentCustomerId = UUID.randomUUID()
+        currentAmount = valor
+
+        val request = CreatePaymentRequest(
+            orderId = currentOrderId,
+            customerId = currentCustomerId,
+            amount = currentAmount,
+            paymentMethod = "MERCADO_PAGO_QR"
+        )
+        val created = paymentController.createPaymentForOrder(currentOrderId, request).body!!
+        val webhookPayload = WebhookNotification(
+            id = created.id,
+            status = "rejected",
+            orderId = currentOrderId
+        )
+        paymentController.webhook(webhookPayload)
+        val saved = paymentRepository.findById(created.id)
+        assertNotNull(saved)
+        assertEquals("REJECTED", saved!!.status)
+        lastCreatedPayment = created
+    }
+
+    @Quando("o atendente tenta realizar o estorno daquela cobrança recusada")
+    fun tentaEstornoCobrancaRecusada() {
+        val payment = lastCreatedPayment ?: fail("Nenhum pagamento disponível")
+        val refundReq = RefundPaymentRequest(reason = "Tentativa indevida de estorno")
+        lastException = null
+        try {
+            paymentController.refundPayment(payment.id, refundReq)
+        } catch (ex: Throwable) {
+            lastException = ex
+        }
+    }
+
+    @Então("a operação deve ser rejeitada com erro de transição inválida ou estado incompatível")
+    fun operacaoDeveSerRejeitada() {
+        assertNotNull(lastException, "Deveria ter lançado uma exceção de integridade ou regra de negócio")
+        assertTrue(
+            lastException is IllegalStateException || lastException?.message?.contains("não permite estorno") == true,
+            "Exceção inesperada: ${lastException?.javaClass?.name} - ${lastException?.message}"
+        )
+    }
+
+    @E("o status do pagamento no DynamoDB deve permanecer {string}")
+    fun statusDevePermanecer(statusEsperado: String) {
+        val payment = lastCreatedPayment ?: fail("Nenhum pagamento disponível")
+        val saved = paymentRepository.findById(payment.paymentId)
+        assertNotNull(saved)
+        assertEquals(statusEsperado, saved!!.status)
     }
 }

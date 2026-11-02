@@ -75,3 +75,4 @@ data class PaymentDynamoItem(
     @get:DynamoDbAttribute("refund_date")
     var refundDate: String? = null
 )
+

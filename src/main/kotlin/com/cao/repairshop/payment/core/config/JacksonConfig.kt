@@ -21,3 +21,4 @@ class JacksonConfig {
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
     }
 }
+

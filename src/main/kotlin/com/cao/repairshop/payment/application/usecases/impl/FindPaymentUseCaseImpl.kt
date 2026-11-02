@@ -24,3 +24,4 @@ class FindPaymentUseCaseImpl(
         return paymentGateway.findByOrderId(orderId)
     }
 }
+

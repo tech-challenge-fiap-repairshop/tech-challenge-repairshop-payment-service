@@ -1,6 +1,5 @@
 package com.cao.repairshop.payment.infrastructure.persistence.dynamo
 
-import com.cao.repairshop.payment.infrastructure.persistence.dynamo.mapper.PaymentDynamoMapper
 import com.cao.repairshop.payment.infrastructure.persistence.dynamo.models.InvoiceDynamoItem
 import com.cao.repairshop.payment.infrastructure.persistence.dynamo.models.PaymentDynamoItem
 import org.slf4j.LoggerFactory
@@ -185,3 +184,4 @@ class DynamoPaymentRepository(
         )
     }
 }
+

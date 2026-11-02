@@ -180,6 +180,17 @@ jobs:
       - name: Recompile for Sonar binaries
         run: mvn compile -B -ntp -DskipTests
 
+      - name: Trivy SCA Dependency Vulnerability Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: 'pom.xml'
+          scanners: 'vuln'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
       - name: SonarCloud Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

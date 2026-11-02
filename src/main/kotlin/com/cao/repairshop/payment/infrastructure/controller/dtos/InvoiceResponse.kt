@@ -11,3 +11,4 @@ data class InvoiceResponse(
     val emissionDate: String,
     val invoiceInfo: String
 )
+

@@ -7,3 +7,4 @@ data class WebhookNotification(
     val status: String,
     val orderId: UUID? = null
 )
+

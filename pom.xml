@@ -7,7 +7,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.0.6</version>
+		<version>4.0.7</version>
 		<relativePath/>
 	</parent>
 
@@ -23,7 +23,14 @@
 		<sonar.organization>alexandre-agamin</sonar.organization>
 		<sonar.host.url>https://sonarcloud.io</sonar.host.url>
 		<sonar.coverage.jacoco.xmlReportPaths>${project.build.directory}/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
+		<tomcat.version>11.0.25</tomcat.version>
+		<spring-framework.version>7.0.9</spring-framework.version>
+		<spring-security.version>7.0.6</spring-security.version>
+		<netty.version>4.2.17.Final</netty.version>
+		<log4j2.version>2.25.5</log4j2.version>
+		<micrometer.version>1.16.6</micrometer.version>
 		<sonar.exclusions>
+			**/.github/**,
 			**/config/**,
 			**/dto/**,
 			**/dtos/**,
@@ -31,6 +38,40 @@
 			**/*Application*
 		</sonar.exclusions>
 	</properties>
+
+	<dependencyManagement>
+		<dependencies>
+			<!-- Netty BOM security fix (CVE-2026-75595, CVE-2026-59901, CVE-2026-59903) -->
+			<dependency>
+				<groupId>io.netty</groupId>
+				<artifactId>netty-bom</artifactId>
+				<version>${netty.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			<!-- Jackson Core & Databind fixes (CVE-2026-89407, CVE-2026-89425, CVE-2026-91776, CVE-2026-91777) -->
+			<dependency>
+				<groupId>com.fasterxml.jackson.core</groupId>
+				<artifactId>jackson-core</artifactId>
+				<version>2.21.7</version>
+			</dependency>
+			<dependency>
+				<groupId>com.fasterxml.jackson.core</groupId>
+				<artifactId>jackson-databind</artifactId>
+				<version>2.21.7</version>
+			</dependency>
+			<dependency>
+				<groupId>tools.jackson.core</groupId>
+				<artifactId>jackson-core</artifactId>
+				<version>3.1.7</version>
+			</dependency>
+			<dependency>
+				<groupId>tools.jackson.core</groupId>
+				<artifactId>jackson-databind</artifactId>
+				<version>3.1.7</version>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
 
 	<dependencies>
 		<dependency>
@@ -57,9 +98,8 @@
 			<version>2.29.50</version>
 		</dependency>
 		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-aop</artifactId>
-			<version>3.4.3</version>
+			<groupId>org.aspectj</groupId>
+			<artifactId>aspectjweaver</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>io.github.resilience4j</groupId>
@@ -74,7 +114,7 @@
 		<dependency>
 			<groupId>io.opentelemetry</groupId>
 			<artifactId>opentelemetry-api</artifactId>
-			<version>1.47.0</version>
+			<version>1.67.0</version>
 		</dependency>
 		<dependency>
 			<groupId>org.springdoc</groupId>
@@ -263,6 +303,7 @@
 				<configuration>
 					<excludes>
 						<exclude>**/config/**</exclude>
+						<exclude>**/metrics/**</exclude>
 						<exclude>**/dto/**</exclude>
 						<exclude>**/dtos/**</exclude>
 						<exclude>**/models/**</exclude>

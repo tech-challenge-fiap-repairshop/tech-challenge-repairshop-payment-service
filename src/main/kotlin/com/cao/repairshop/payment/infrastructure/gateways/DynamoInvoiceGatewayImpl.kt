@@ -22,3 +22,4 @@ class DynamoInvoiceGatewayImpl(
         return emptyList()
     }
 }
+

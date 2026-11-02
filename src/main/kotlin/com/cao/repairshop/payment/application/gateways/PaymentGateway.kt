@@ -11,3 +11,4 @@ interface PaymentGateway {
     fun updateStatus(id: String, status: PaymentStatus, osUpdateStatus: String? = null, dispatchStatus: String? = null): Payment?
     fun refund(id: String, reason: String): Payment?
 }
+

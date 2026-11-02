@@ -26,6 +26,9 @@ class RefundPaymentUseCaseImpl(
         val payment = paymentGateway.findById(paymentId)
             ?: throw PaymentNotFoundException("Pagamento não encontrado para estorno: $paymentId")
 
+        // Validação de pré-condição de domínio (Fail-Fast antes de acionar parceiro externo)
+        check(payment.canBeRefunded()) { "Pagamento com status ${payment.status} não permite estorno" }
+
         // 1. Invoca estorno no parceiro (Mercado Pago protegido por Circuit Breaker)
         val partnerRefundResult = partnerGateway.refundPayment(payment.id, payment.amount, refundReason)
 
@@ -63,3 +66,4 @@ class RefundPaymentUseCaseImpl(
         }
     }
 }
+

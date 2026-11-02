@@ -48,3 +48,4 @@ data class InvoiceDynamoItem(
     @get:DynamoDbAttribute("client_dispatch")
     var clientDispatch: String = "PENDING"
 )
+

@@ -45,3 +45,4 @@ interface PaymentApi {
     @Operation(summary = "Webhook de callback do Mercado Pago")
     fun webhook(notification: WebhookNotification): ResponseEntity<Map<String, String>>
 }
+
