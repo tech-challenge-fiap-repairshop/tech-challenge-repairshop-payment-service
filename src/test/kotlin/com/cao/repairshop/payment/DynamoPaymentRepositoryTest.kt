@@ -138,4 +138,49 @@ class DynamoPaymentRepositoryTest {
         assertEquals("APPROVED", request.expressionAttributeValues()[":newStatus"]?.s())
         assertEquals("DISPATCHED", request.expressionAttributeValues()[":ds"]?.s())
     }
+
+    @Test
+    fun `findByServiceOrderId should query items by order id PK`() {
+        val orderId = UUID.randomUUID()
+        val itemMap = mapOf(
+            "PK" to AttributeValue.builder().s("BILLING#$orderId").build(),
+            "SK" to AttributeValue.builder().s("PAY#1#pay-1").build(),
+            "payment_id" to AttributeValue.builder().s("pay-1").build(),
+            "service_order_id" to AttributeValue.builder().s(orderId.toString()).build(),
+            "price_value" to AttributeValue.builder().n("99.9").build(),
+            "status" to AttributeValue.builder().s("PENDING").build()
+        )
+
+        val response = QueryResponse.builder().items(listOf(itemMap)).build()
+        every { dynamoDbClient.query(any<QueryRequest>()) } returns response
+
+        val results = repository.findByServiceOrderId(orderId)
+
+        assertEquals(1, results.size)
+        assertEquals("pay-1", results.first().paymentId)
+    }
+
+    @Test
+    fun `refundPaymentById should find item, update and return refunded item`() {
+        val id = "pay-to-refund"
+        val orderId = UUID.randomUUID().toString()
+        val itemMap = mapOf(
+            "PK" to AttributeValue.builder().s("BILLING#$orderId").build(),
+            "SK" to AttributeValue.builder().s("PAY#1#$id").build(),
+            "payment_id" to AttributeValue.builder().s(id).build(),
+            "service_order_id" to AttributeValue.builder().s(orderId).build(),
+            "price_value" to AttributeValue.builder().n("200.0").build(),
+            "status" to AttributeValue.builder().s("APPROVED").build()
+        )
+
+        every { dynamoDbClient.scan(any<ScanRequest>()) } returns ScanResponse.builder().items(listOf(itemMap)).build()
+        every { dynamoDbClient.updateItem(any<UpdateItemRequest>()) } returns mockk()
+
+        val result = repository.refundPaymentById(id, "Cancelamento do cliente")
+
+        assertNotNull(result)
+        assertEquals("REFUNDED", result?.status)
+        assertEquals("Cancelamento do cliente", result?.refundReason)
+        verify(exactly = 1) { dynamoDbClient.updateItem(any<UpdateItemRequest>()) }
+    }
 }
