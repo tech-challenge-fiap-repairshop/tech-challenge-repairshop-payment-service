@@ -90,17 +90,17 @@ class RefundPaymentUseCaseImplTest {
     @Test
     fun `executeById should fail when payment is not refundable`() {
         val payment = Payment(
-            id = "PAY-PENDING",
+            id = "PAY-REJECTED",
             orderId = UUID.randomUUID(),
             customerId = UUID.randomUUID(),
             amount = 50.0,
-            status = PaymentStatus.PENDING,
+            status = PaymentStatus.REJECTED,
             paymentMethod = PaymentMethod.MERCADO_PAGO_QR
         )
-        every { paymentGateway.findById("PAY-PENDING") } returns payment
+        every { paymentGateway.findById("PAY-REJECTED") } returns payment
 
         assertThrows<IllegalStateException> {
-            useCase.executeById("PAY-PENDING", null)
+            useCase.executeById("PAY-REJECTED", null)
         }
     }
 
@@ -142,12 +142,12 @@ class RefundPaymentUseCaseImplTest {
     }
 
     @Test
-    fun `executeByOrderId should return empty list when no payments exist`() {
+    fun `executeByOrderId should throw PaymentNotFoundException when no payments exist`() {
         val orderId = UUID.randomUUID()
         every { paymentGateway.findByOrderId(orderId) } returns emptyList()
 
-        val results = useCase.executeByOrderId(orderId, null)
-
-        assertTrue(results.isEmpty())
+        assertThrows<PaymentNotFoundException> {
+            useCase.executeByOrderId(orderId, null)
+        }
     }
 }
