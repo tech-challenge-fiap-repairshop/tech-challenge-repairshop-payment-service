@@ -61,7 +61,13 @@ class RefundPaymentUseCaseImpl(
             throw PaymentNotFoundException("Nenhum pagamento encontrado para a OS: $orderId")
         }
 
-        return payments.map { payment ->
+        val refundablePayments = payments.filter { it.canBeRefunded() }
+        if (refundablePayments.isEmpty()) {
+            logger.info("Nenhum pagamento elegivel para estorno na OS: {}", orderId)
+            return emptyList()
+        }
+
+        return refundablePayments.map { payment ->
             executeById(payment.id, refundReason)
         }
     }
