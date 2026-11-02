@@ -55,4 +55,29 @@ class MercadoPagoClientTest {
         assertTrue(fallbackResponse.qrCode!!.contains(request.amount.toString()))
         assertTrue(fallbackResponse.isFallback)
     }
+
+    @Test
+    fun `refundPayment with offline token should return mock refund response`() {
+        val response = client.refundPayment("MP-12345", 150.0, "Cancelamento do cliente")
+
+        assertNotNull(response)
+        assertTrue(response.refundId.startsWith("REF-MP-"))
+        assertEquals("MP-12345", response.paymentId)
+        assertEquals("REFUNDED", response.status)
+        assertEquals(150.0, response.amount)
+        assertFalse(response.isFallback)
+    }
+
+    @Test
+    fun `fallbackRefundPayment should return contingency refund response`() {
+        val throwable = RuntimeException("API timeout")
+        val fallback = client.fallbackRefundPayment("MP-99999", 200.0, "Falha de rede", throwable)
+
+        assertNotNull(fallback)
+        assertTrue(fallback.refundId.startsWith("FALLBACK-REF-"))
+        assertEquals("MP-99999", fallback.paymentId)
+        assertEquals("REFUNDED", fallback.status)
+        assertEquals(200.0, fallback.amount)
+        assertTrue(fallback.isFallback)
+    }
 }
